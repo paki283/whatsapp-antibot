@@ -1,0 +1,7 @@
+run = "npm install && npm start"
+modules = ["nodejs-20"]
+entrypoint = "whatsapp-bot.js"
+
+[packager]
+language = "nodejs"
+ignoredPaths = ["bot_session"]
