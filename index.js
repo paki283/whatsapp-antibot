@@ -1,69 +1,104 @@
-import makeWASocket, {
+import pkg from '@whiskeysockets/baileys'
+const {
+    makeWASocket,
     DisconnectReason,
     useMultiFileAuthState,
     downloadMediaMessage
-} from '@whiskeysockets/baileys'
+} = pkg
+
 import pino from 'pino'
 import fs from 'fs'
 
-const OWNER_NUMBER = "923200060103"
-const CONFIG_FILE = './config.json'
+// === SETTINGS ===
+const OWNER_NUMBER = '923001234567' // Apna WhatsApp number yahan daalo with country code, no +
+const TRIGGER_EMOJI = '👁️' // Jis emoji se reply karoge wo save ho jayega
+const TARGET_GROUP_FILE = 'target.json'
 
-// Load config
-let config = {
-    targetGroup: null,
-    viewOnceTrigger: "😭"
-}
-if (fs.existsSync(CONFIG_FILE)) {
-    config = JSON.parse(fs.readFileSync(CONFIG_FILE))
-}
-
-function saveConfig() {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config))
+// === BOT CODE ===
+let targetGroupId = null
+if (fs.existsSync(TARGET_GROUP_FILE)) {
+    targetGroupId = JSON.parse(fs.readFileSync(TARGET_GROUP_FILE)).id
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth')
+    const { state, saveCreds } = await useMultiFileAuthState('./auth')
 
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
-        markOnlineOnConnect: false,
-        syncFullHistory: false
+        browser: ['Personal AntiBot', 'Chrome', '1.0.0']
+    })
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
+            if (shouldReconnect) startBot()
+        } else if (connection === 'open') {
+            console.log('✅ Bot Connected!')
+        }
+        if (qr) {
+            console.log('\n========== PAIRING CODE ==========')
+            console.log('WhatsApp > Linked Devices > Link with phone number')
+            console.log('Code will appear here in 10-20 sec')
+            console.log('==================================\n')
+        }
     })
 
     sock.ev.on('creds.update', saveCreds)
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0]
+        if (!msg.message) return
+        const sender = msg.key.participant || msg.key.remoteJid
+        const from = msg.key.remoteJid
 
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) startBot()
-        } else if (connection === 'open') {
-            console.log('✅ Bot Connected!')
-            await sock.sendPresenceUpdate('unavailable')
-        }
+        // Owner commands
+        if (sender.includes(OWNER_NUMBER)) {
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
 
-        if (!sock.authState.creds.registered) {
-            setTimeout(async () => {
-                try {
-                    let code = await sock.requestPairingCode(OWNER_NUMBER)
-                    console.log(`\n\n========== PAIRING CODE ==========\n ${code}\n=================================\n\n`)
-                    console.log('WhatsApp > Linked Devices > Link with phone number me daalo')
-                } catch (e) {
-                    console.log('Pairing code error:', e)
+            if (text === '.update') {
+                targetGroupId = from
+                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
+                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
+                return
+            }
+
+            if (text.startsWith('.antivv ')) {
+                const newEmoji = text.split(' ')[1]
+                if (newEmoji) {
+                    fs.writeFileSync('emoji.json', JSON.stringify({ emoji: newEmoji }))
+                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
                 }
-            }, 3000)
+                return
+            }
+        }
+
+        // Forward deleted, edited, viewonce messages
+        if (targetGroupId && from!== targetGroupId) {
+            const messageType = Object.keys(msg.message)[0]
+
+            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
+                const deletedMsg = msg.message.protocolMessage.key
+                await sock.sendMessage(targetGroupId, {
+                    text: `🗑️ Message deleted by ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
+                })
+            }
+
+            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
+                try {
+                    const media = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) })
+                    await sock.sendMessage(targetGroupId, {
+                        image: media,
+                        caption: `👁️ ViewOnce image from ${sender.split('@')[0]}`
+                    })
+                } catch (e) {}
+            }
         }
     })
+}
 
-    // Always offline
-    sock.ev.on('presence.update', async () => {
-        await sock.sendPresenceUpdate('unavailable')
-    })
-
+startBot()
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0]
         if (!msg.message || msg.key.fromMe) return
