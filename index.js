@@ -1,69 +1,115 @@
-import makeWASocket, {
+import pkg from '@whiskeysockets/baileys'
+const {
+    makeWASocket,
     DisconnectReason,
     useMultiFileAuthState,
-    fetchLatestBaileysVersion,
     downloadMediaMessage
-} from '@whiskeysockets/baileys'
+} = pkg
 
 import pino from 'pino'
 import fs from 'fs'
 
 const OWNER_NUMBER = '923356331700'
+const TARGET_GROUP_FILE = 'target.json'
+const EMOJI_FILE = 'emoji.json'
 
-const TARGET_GROUP_FILE = './target.json'
-const EMOJI_FILE = './emoji.json'
-
-let MESSAGE_STORE = {}
-
-let TRIGGER_EMOJI = '😭😭'
-
+let TRIGGER_EMOJI = '👁️'
 if (fs.existsSync(EMOJI_FILE)) {
-    try {
-        const data = JSON.parse(
-            fs.readFileSync(EMOJI_FILE)
-        )
-        TRIGGER_EMOJI = data.emoji
-    } catch {}
+    TRIGGER_EMOJI = JSON.parse(fs.readFileSync(EMOJI_FILE)).emoji
 }
 
 let targetGroupId = null
-
 if (fs.existsSync(TARGET_GROUP_FILE)) {
-    try {
-        const data = JSON.parse(
-            fs.readFileSync(TARGET_GROUP_FILE)
-        )
-        targetGroupId = data.id
-    } catch {}
+    targetGroupId = JSON.parse(fs.readFileSync(TARGET_GROUP_FILE)).id
 }
 
 async function startBot() {
-
-    const { state, saveCreds } =
-        await useMultiFileAuthState('./auth')
-
-    const { version } =
-        await fetchLatestBaileysVersion()
+    const { state, saveCreds } = await useMultiFileAuthState('./auth')
 
     const sock = makeWASocket({
-        version,
         auth: state,
+        logger: pino({ level: 'silent' }),
+        browser: ['Personal AntiBot', 'Chrome', '1.0.0']
+    })
 
-        logger: pino({
-            level: 'silent'
-        }),
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
+            if (shouldReconnect) startBot()
+        } else if (connection === 'open') {
+            console.log('✅ Bot Connected!')
+        }
+        if (qr) {
+            console.log('\n========== PAIRING CODE ==========')
+            console.log('WhatsApp > Linked Devices > Link with phone number')
+            console.log('==================================\n')
+        }
+    })
 
-        browser: [
-            'Mini-MD',
-            'Chrome',
-            '1.0.0'
-        ],
+    sock.ev.on('creds.update', saveCreds)
 
-        printQRInTerminal: false,
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0]
+        if (!msg.message) return
+        const sender = msg.key.participant || msg.key.remoteJid
+        const from = msg.key.remoteJid
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
 
-        markOnlineOnConnect: false,
+        if (sender.includes(OWNER_NUMBER)) {
+            if (text === '.update') {
+                targetGroupId = from
+                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
+                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
+                return
+            }
 
-        syncFullHistory: false
+            if (text.startsWith('.antivv ')) {
+                const newEmoji = text.trim().split(' ')[1]
+                if (newEmoji) {
+                    TRIGGER_EMOJI = newEmoji
+                    fs.writeFileSync(EMOJI_FILE, JSON.stringify({ emoji: newEmoji }))
+                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
+                }
+                return
+            }
+        }
+
+        if (targetGroupId && from!== targetGroupId) {
+            const messageType = Object.keys(msg.message)[0]
+
+            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
+                await sock.sendMessage(targetGroupId, {
+                    text: `🗑️ *Message Deleted*\nFrom: ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
+                })
+            }
+
+            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
+                try {
+                    const mediaMsg = msg.message.viewOnceMessage?.message || msg.message.viewOnceMessageV2?.message
+                    const mediaType = Object.keys(mediaMsg)[0]
+                    const media = await downloadMediaMessage({ message: mediaMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) })
+
+                    if (mediaType === 'imageMessage') {
+                        await sock.sendMessage(targetGroupId, {
+                            image: media,
+                            caption: `${TRIGGER_EMOJI} *ViewOnce Image*\nFrom: ${sender.split('@')[0]}`
+                        })
+                    } else if (mediaType === 'videoMessage') {
+                        await sock.sendMessage(targetGroupId, {
+                            video: media,
+                            caption: `${TRIGGER_EMOJI} *ViewOnce Video*\nFrom: ${sender.split('@')[0]}`
+                        })
+                    }
+                } catch (e) {
+                    console.log('ViewOnce error:', e)
+                }
+            }
+        }
+    })
+}
+
+startBot()        syncFullHistory: false
     })
 
     // PAIR CODE
