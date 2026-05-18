@@ -1,40 +1,175 @@
-import pkg from '@whiskeysockets/baileys'
-const {
-    makeWASocket,
+import makeWASocket, {
     DisconnectReason,
     useMultiFileAuthState,
+    fetchLatestBaileysVersion,
     downloadMediaMessage
-} = pkg
+} from '@whiskeysockets/baileys'
 
 import pino from 'pino'
 import fs from 'fs'
 
 const OWNER_NUMBER = '923356331700'
-const TARGET_GROUP_FILE = 'target.json'
-const EMOJI_FILE = 'emoji.json'
 
-let TRIGGER_EMOJI = '👁️'
+const TARGET_GROUP_FILE = './target.json'
+const EMOJI_FILE = './emoji.json'
+
+let MESSAGE_STORE = {}
+
+let TRIGGER_EMOJI = '😭😭'
+
 if (fs.existsSync(EMOJI_FILE)) {
-    TRIGGER_EMOJI = JSON.parse(fs.readFileSync(EMOJI_FILE)).emoji
+    try {
+        TRIGGER_EMOJI =
+            JSON.parse(
+                fs.readFileSync(EMOJI_FILE)
+            ).emoji
+    } catch {}
 }
 
 let targetGroupId = null
+
 if (fs.existsSync(TARGET_GROUP_FILE)) {
-    targetGroupId = JSON.parse(fs.readFileSync(TARGET_GROUP_FILE)).id
+    try {
+        targetGroupId =
+            JSON.parse(
+                fs.readFileSync(TARGET_GROUP_FILE)
+            ).id
+    } catch {}
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth')
 
-    const sock = makeWAS                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
-                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
-                return
+    const { state, saveCreds } =
+        await useMultiFileAuthState('./auth')
+
+    const { version } =
+        await fetchLatestBaileysVersion()
+
+    const sock = makeWASocket({
+        version,
+        auth: state,
+
+        logger: pino({
+            level: 'silent'
+        }),
+
+        browser: [
+            'Mini-MD',
+            'Chrome',
+            '1.0.0'
+        ],
+
+        printQRInTerminal: false,
+
+        markOnlineOnConnect: false,
+
+        syncFullHistory: false,
+
+        generateHighQualityLinkPreview: false,
+
+        defaultQueryTimeoutMs: 0
+    })
+
+    // PAIR CODE
+    if (!state.creds.registered) {
+
+        setTimeout(async () => {
+
+            try {
+
+                const code =
+                    await sock.requestPairingCode(
+                        OWNER_NUMBER
+                    )
+
+                console.log(`
+╔════════════════════╗
+      PAIR CODE
+       ${code}
+╚════════════════════╝
+`)
+
+            } catch (err) {
+
+                console.log(
+                    'Pair Code Error:',
+                    err
+                )
             }
 
-            if (text.startsWith('.antivv ')) {
-                const newEmoji = text.trim().split(' ')[1]
-                if (newEmoji) {
-                    TRIGGER_EMOJI = newEmoji
+        }, 3000)
+    }
+
+    sock.ev.on(
+        'creds.update',
+        saveCreds
+    )
+
+    sock.ev.on(
+        'connection.update',
+        async (update) => {
+
+            const {
+                connection,
+                lastDisconnect
+            } = update
+
+            if (connection === 'close') {
+
+                const statusCode =
+                    lastDisconnect?.error
+                        ?.output?.statusCode
+
+                const shouldReconnect =
+                    statusCode !==
+                    DisconnectReason.loggedOut
+
+                console.log(
+                    '❌ Connection Closed'
+                )
+
+                if (shouldReconnect) {
+                    startBot()
+                }
+
+            } else if (
+                connection === 'open'
+            ) {
+
+                console.log(
+                    '✅ Bot Connected'
+                )
+            }
+        }
+    )
+
+    sock.ev.on(
+        'messages.upsert',
+        async ({ messages }) => {
+
+            try {
+
+                const msg = messages[0]
+
+                if (!msg.message) return
+
+                const from =
+                    msg.key.remoteJid
+
+                const sender =
+                    msg.key.participant ||
+                    msg.key.remoteJid ||
+                    ''
+
+                const text =
+                    msg.message.conversation ||
+                    msg.message
+                        .extendedTextMessage
+                        ?.text ||
+                    ''
+
+                // SAVE MESSAGE
+                MESSAGE_STORE[msg.key.id] =                    TRIGGER_EMOJI = newEmoji
                     fs.writeFileSync(EMOJI_FILE, JSON.stringify({ emoji: newEmoji }))
                     await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
                 }
