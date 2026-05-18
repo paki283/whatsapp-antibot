@@ -1,1283 +1,278 @@
-import pkg from '@whiskeysockets/baileys'
-const {
-    makeWASocket,
-    DisconnectReason,
-    useMultiFileAuthState,
-    downloadMediaMessage
-} = pkg
-
-import pino from 'pino'
-import fs from 'fs'
-
-const OWNER_NUMBER = '923356331700'
-const TARGET_GROUP_FILE = 'target.json'
-const EMOJI_FILE = 'emoji.json'
-
-let TRIGGER_EMOJI = '👁️'
-if (fs.existsSync(EMOJI_FILE)) {
-    TRIGGER_EMOJI = JSON.parse(fs.readFileSync(EMOJI_FILE)).emoji
-}
-
-let targetGroupId = null
-if (fs.existsSync(TARGET_GROUP_FILE)) {
-    targetGroupId = JSON.parse(fs.readFileSync(TARGET_GROUP_FILE)).id
-}
+const { 
+    makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    downloadContentFromMessage 
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const config = require('./config');
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth')
-
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    
     const sock = makeWASocket({
-        auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['Personal AntiBot', 'Chrome', '1.0.0']
-    })
+        printQRInTerminal: true,
+        auth: state
+    });
+
+    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) startBot()
+            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) startBot();
         } else if (connection === 'open') {
-            console.log('✅ Bot Connected!')
+            console.log('⚡ SILENT Hacker Bot Connected Successfully!');
         }
-        if (qr) {
-            console.log('\n========== PAIRING CODE ==========')
-            console.log('WhatsApp > Linked Devices > Link with phone number')
-            console.log('==================================\n')
-        }
-    })
+    });
 
-    sock.ev.on('creds.update', saveCreds)
+    // Messages Aur Events Handler
+    sock.ev.on('messages.upsert', async (chatUpdate) => {
+        try {
+            const msg = chatUpdate.messages[0];
+            if (!msg.message) return;
+            
+            const from = msg.key.remoteJid;
+            const type = Object.keys(msg.message)[0];
+            
+            // 1. ANTI VIEW-ONCE LOGIC
+            if (config.antiViewOnce && (type === 'viewOnceMessage' || type === 'viewOnceMessageV2')) {
+                const viewOnceData = msg.message[type].message;
+                const mediaType = Object.keys(viewOnceData)[0];
+                
+                // Content type change karke normal message bana dena
+                viewOnceData[mediaType].viewOnce = false;
+                
+                // Caption ke sath custom emoji lagana
+                let caption = viewOnceData[mediaType].caption || "";
+                caption = `${config.viewOnceEmoji} *[ANTI-VIEW ONCE RECOVERED]*\n\n${caption}`;
+                viewOnceData[mediaType].caption = caption;
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message) return
-        const sender = msg.key.participant || msg.key.remoteJid
-        const from = msg.key.remoteJid
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
-
-        if (sender.includes(OWNER_NUMBER)) {
-            if (text === '.update') {
-                targetGroupId = from
-                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
-                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
-                return
+                await sock.sendMessage(from, { forward: msg }, { quoted: msg });
+                return;
             }
 
-            if (text.startsWith('.antivv ')) {
-                const newEmoji = text.trim().split(' ')[1]
-                if (newEmoji) {
-                    TRIGGER_EMOJI = newEmoji
-                    fs.writeFileSync(EMOJI_FILE, JSON.stringify({ emoji: newEmoji }))
-                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
-                }
-                return
+            // Command Processing
+            const body = (type === 'conversation') ? msg.message.conversation : 
+                         (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text : 
+                         (type === 'imageMessage') ? msg.message.imageMessage.caption : 
+                         (type === 'videoMessage') ? msg.message.videoMessage.caption : '';
+                         
+            if (!body.startsWith(config.prefix)) return;
+            const command = body.slice(config.prefix.length).trim().split(/ +/).shift().toLowerCase();
+
+            // 2. MENU COMMAND
+            if (command === 'menu') {
+                const menuText = `❖ ── ✦ 𝗦𝗜𝗟𝗘𝗡𝗧 𝙃𝙖𝙘𝙠𝙚𝙧𝙨 ✦ ── ❖
+ 
+ 👤 𝗢𝘄𝗻𝗲𝗿: ${config.ownerName}
+ ⚙️ 𝗠𝗼𝗱𝗲: ${config.mode.toUpperCase()}
+ ⚡ 𝗣𝗿𝗲𝗳𝗶𝘅: [ ${config.prefix} ]
+
+ ╭── ✦ [ 𝗬𝗢𝗨𝗧𝗨𝗕𝗘 𝗠𝗘𝗡𝗨 ] ✦ ──╮
+ │ 
+ │ ➭ *${config.prefix}play / ${config.prefix}song* [name]
+ │    _Direct HQ Audio Download_
+ │ ➭ *${config.prefix}video* [name]
+ │    _Direct HD Video Download_
+ │ ➭ *${config.prefix}yt* [link]
+ │    _Download YT Video/Audio_
+ │ ➭ *${config.prefix}yts* [query]
+ │    _Search YouTube Videos_
+ │
+ ╰──────────────────────╯
+
+ ╭── ✦ [ 𝗧𝗜𝗞𝗧𝗢𝗞 𝗠𝗘𝗡𝗨 ] ✦ ──╮
+ │ 
+ │ ➭ *${config.prefix}tt* [link]
+ │    _No-Watermark TT Video_
+ │ ➭ *${config.prefix}tt audio* [link]
+ │    _Extract TikTok Sound_
+ │ ➭ *${config.prefix}tts* [query]
+ │    _Search TikTok Trends_
+ │
+ ╰──────────────────────╯
+
+ ╭── ✦ [ 𝗨𝗡𝗜𝗩𝗘𝗥𝗦𝗔𝗟 𝗠𝗘𝗗𝗜𝗔 ] ✦ ──╮
+ │ 
+ │ ➭ *${config.prefix}fb / ${config.prefix}facebook* [link]
+ │    _FB High-Quality Videos_
+ │ ➭ *${config.prefix}ig / ${config.prefix}insta* [link]
+ │    _Instagram Reels/IGTV_
+ │ ➭ *${config.prefix}tw / ${config.prefix}x* [link]
+ │    _X/Twitter Media Extract_
+ │ ➭ *${config.prefix}snap* [link]
+ │    _Snapchat Spotlights_
+ │ ➭ *${config.prefix}threads* [link]
+ │    _Threads Video Download_
+ │ ➭ *${config.prefix}pin* [link]
+ │    _Pinterest Video/Images_
+ │ ➭ *${config.prefix}reddit* [link]
+ │    _Reddit Videos & GIFs_
+ │
+ ╰──────────────────────╯
+
+ ╭── ✦ [ 🧠 𝗔𝗜 𝗠𝗔𝗦𝗧𝗘𝗥𝗠𝗜𝗡𝗗𝗦 ] ──╮
+ │ 
+ │ ➭ *${config.prefix}ai / ${config.prefix}ask* [text]
+ │    _Faisalabadi Smart AI_
+ │ ➭ *${config.prefix}gpt / ${config.prefix}chatgpt* [text]
+ │    _ChatGPT 4o Persona_
+ │ ➭ *${config.prefix}gemini* [text]
+ │    _Google Gemini Pro_
+ │ ➭ *${config.prefix}claude* [text]
+ │    _Anthropic Claude 3_
+ │ ➭ *${config.prefix}llama / ${config.prefix}groq* [text]
+ │    _Meta Llama 3 Fast Engine_
+ │
+ ╰──────────────────────╯
+
+ ╭── ✦ [ 𝗢𝗪𝗡𝗘𝗥 𝗠𝗘𝗡𝗨 ] ✦ ──╮
+ │ 
+ │ ➭ *${config.prefix}setprefix* [symbol]
+ │    _Change Bot Prefix_
+ │ ➭ *${config.prefix}mode* [public/private/admin]
+ │    _Change Bot Work Mode_
+ │ ➭ *${config.prefix}alwaysonline* [on/off]
+ │    _Force Online Status_
+ │ ➭ *${config.prefix}autoread* [on/off]
+ │    _Auto Seen Messages_
+ │ ➭ *${config.prefix}autoreact* [on/off]
+ │    _Auto Like Messages_
+ │ ➭ *${config.prefix}autostatus* [on/off]
+ │    _Auto View Status_
+ │ ➭ *${config.prefix}statusreact* [on/off]
+ │    _Auto Like Status_
+ │ ➭ *${config.prefix}listbots*
+ │    _Show Active Sessions_
+ │ ➭ *${config.prefix}stats*
+ │    _Check System Power_
+ │ ➭ *${config.prefix}pair* [number]
+ │    _Connect New Bot Session_
+ │
+ ╰──────────────────────╯
+ 
+ ╭── ✦ [ 🛡️ 𝗚𝗥𝗢𝗨𝗣 𝗠𝗘𝗡𝗨 🛡️ ] ──╮
+ │ 
+ │ ➭ *${config.prefix}antilink* [on/off]
+ │    _Block Links in Group_
+ │ ➭ *${config.prefix}antipic* [on/off]
+ │    _Block Image Sharing_
+ │ ➭ *${config.prefix}antivideo* [on/off]
+ │    _Block Video Sharing_
+ │ ➭ *${config.prefix}antisticker* [on/off]
+ │    _Block Sticker Sharing_
+ │ ➭ *${config.prefix}welcome* [on/off]
+ │    _Welcome New Members_
+ │ ➭ *${config.prefix}antidelete* [on/off]
+ │    _Anti Delete Messages_
+ │ ➭ *${config.prefix}kick* [@tag/reply]
+ │    _Remove Member_
+ │ ➭ *${config.prefix}add* [number]
+ │    _Add New Member_
+ │ ➭ *${config.prefix}promote* [@tag/reply]
+ │    _Make Group Admin_
+ │ ➭ *${config.prefix}demote* [@tag/reply]
+ │    _Remove Admin Role_
+ │ ➭ *${config.prefix}tagall* [text]
+ │    _Mention All Members_
+ │ ➭ *${config.prefix}hidetag* [text]
+ │    _Silent Tag All Members_
+ │ ➭ *${config.prefix}group* [open/close]
+ │    _Change Group Settings_
+ │ ➭ *${config.prefix}del* [reply]
+ │    _Delete For Everyone_
+ │ 
+ ╰──────────────────────╯
+
+ ╭── ✦ [ 🛠️ 𝗨𝗧𝗜𝗟𝗜𝗧𝗬 ] ──╮
+ │ 
+ │ ➭ *${config.prefix}vv* [reply to media]
+ │    _Anti View-Once Media Extract_
+ │ ➭ *${config.prefix}id*
+ │    _Get Your Chat ID_
+ │ ➭ *${config.prefix}vc* [Reply Voice] + [nmbr]
+ │    _change your voice_
+ │ 
+ ╰──────────────────────╯
+ 
+ ╭── ✦ [ ☠️ 𝗗𝗔𝗡𝗚𝗘𝗥𝗢𝗨𝗦 𝗭𝗢𝗡𝗘 ] ──╮
+ │ 
+ │ ➭ *${config.prefix}antidelete* [on/off]
+ │    _Auto Recover Deleted Msgs_
+ │ ➭ *${config.prefix}antivv* [on/off]
+ │    _Auto Save View-Once Media_
+ │ ➭ *${config.prefix}anticall* [on/off]
+ │    _Auto Block Incoming Calls_
+ │ ➭ *${config.prefix}antidm* [on/off]
+ │    _Auto Block Unsaved DMs_
+ │ 
+ ╰──────────────────────╯
+ 
+ ╭── ✦ [ 🎨 𝗘𝗗𝗜𝗧𝗜𝗡𝗚 𝗭𝗢𝗡𝗘 🎨 ] ──╮
+ │ 
+ │ ➭ *${config.prefix}s* / *${config.prefix}sticker* [reply image]
+ │    _Convert Image to Sticker_
+ │ ➭ *${config.prefix}toimg* [reply sticker]
+ │    _Convert Sticker to Image_
+ │ ➭ *${config.prefix}togif* [reply sticker]
+ │    _Convert Sticker to GIF_
+ │ ➭ *${config.prefix}tovideo* [reply sticker]
+ │    _Convert Sticker to Video_
+ │ ➭ *${config.prefix}tourl* [reply media]
+ │    _Upload Media to Link_
+ │ ➭ *${config.prefix}toptt* [reply audio]
+ │    _Convert Text to Voice Note_
+ │ ➭ *${config.prefix}fancy* [text]
+ │    _Generate Fancy Fonts_
+ │ 
+ ╰──────────────────────╯
+ 
+ ╭── ✦ [ ✨ 𝗔𝗜 𝗧𝗢𝗢𝗟𝗦 ✨ ] ──╮
+ │ 
+ │ ➭ *${config.prefix}img* [prompt]
+ │    _Generate AI Image_
+ │ ➭ *${config.prefix}remini* [reply img]
+ │    _Enhance Image Quality_
+ │ ➭ *${config.prefix}removebg* [reply img]
+ │    _Remove Background_
+ │ ➭ *${config.prefix}tr* [lang] [text]
+ │    _Translate Text_
+ │ ➭ *${config.prefix}ss* [website link]
+ │    _Take Website Screenshot_
+ │ ➭ *${config.prefix}google* [query]
+ │    _Search on Google_
+ │ ➭ *${config.prefix}weather* [city]
+ │    _Check City Weather_
+ │ 
+ ╰──────────────────────╯`;
+                
+                await sock.sendMessage(from, { text: menuText }, { quoted: msg });
             }
-        }
-
-        if (targetGroupId && from!== targetGroupId) {
-            const messageType = Object.keys(msg.message)[0]
-
-            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
-                await sock.sendMessage(targetGroupId, {
-                    text: `🗑️ *Message Deleted*\nFrom: ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
-                })
-            }
-
-            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
-                try {
-                    const mediaMsg = msg.message.viewOnceMessage?.message || msg.message.viewOnceMessageV2?.message
-                    const mediaType = Object.keys(mediaMsg)[0]
-                    const media = await downloadMediaMessage({ message: mediaMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) })
-
-                    if (mediaType === 'imageMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            image: media,
-                            caption: `${TRIGGER_EMOJI} *ViewOnce Image*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    } else if (mediaType === 'videoMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            video: media,
-                            caption: `${TRIGGER_EMOJI} *ViewOnce Video*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    }
-                } catch (e) {
-                    console.log('ViewOnce error:', e)
-                }
-            }
-        }
-    })
-}
-
-startBot()        syncFullHistory: false
-    })
-
-    // PAIR CODE
-    if (!state.creds.registered) {
-
-        setTimeout(async () => {
-
-            try {
-
-                const code =
-                    await sock.requestPairingCode(
-                        OWNER_NUMBER
-                    )
-
-                console.log(`
-╔══════════════════╗
-     PAIR CODE
-      ${code}
-╚══════════════════╝
-`)
-
-            } catch (err) {
-
-                console.log(
-                    'Pair Error:',
-                    err
-                )
-            }
-
-        }, 3000)
-    }
-
-    sock.ev.on(
-        'creds.update',
-        saveCreds
-    )
-
-    // CONNECTION
-    sock.ev.on(
-        'connection.update',
-        (update) => {
-
-            const {
-                connection,
-                lastDisconnect
-            } = update
-
-            if (connection === 'close') {
-
-                const shouldReconnect =
-                    lastDisconnect?.error
-                        ?.output?.statusCode !==
-                    DisconnectReason.loggedOut
-
-                console.log(
-                    '❌ Connection Closed'
-                )
-
-                if (shouldReconnect) {
-                    startBot()
-                }
-
-            } else if (
-                connection === 'open'
-            ) {
-
-                console.log(
-                    '✅ Bot Connected'
-                )
-            }
-        }
-    )
-
-    // MESSAGE HANDLER
-    sock.ev.on(
-        'messages.upsert',
-        async ({ messages }) => {
-
-            try {
-
-                const msg = messages[0]
-
-                if (!msg.message) return
-
-                const from =
-                    msg.key.remoteJid
-
-                const sender =
-                    msg.key.participant ||
-                    msg.key.remoteJid ||
-                    ''
-
-                const text =
-                    msg.message.conversation ||
-                    msg.message
-                        .extendedTextMessage
-                        ?.text ||
-                    ''
-
-                // SAVE MESSAGE
-                MESSAGE_STORE[msg.key.id] =
-                    msg
-
-                // OWNER COMMANDS
-                if (
-                    sender.includes(
-                        OWNER_NUMBER
-                    )
-                ) {
-
-                    // UPDATE TARGET
-                    if (
-                        text === '.update'
-                    ) {
-
-                        targetGroupId = from
-
-                        fs.writeFileSync(
-                            TARGET_GROUP_FILE,
-                            JSON.stringify({
-                                id: from
-                            })
-                        )
-
-                        await sock.sendMessage(
-                            from,
-                            {
-                                text:
-                                    '✅ Target Updated'
-                            }
-                        )
-
-                        return
-                    }
-
-                    // CHANGE EMOJI
-                    if (
-                        text.startsWith(
-                            '.antivv '
-                        )
-                    ) {
-
-                        const emoji =
-                            text.split(' ')[1]
-
-                        if (emoji) {
-
-                            TRIGGER_EMOJI =
-                                emoji
-
-                            fs.writeFileSync(
-                                EMOJI_FILE,
-                                JSON.stringify({
-                                    emoji
-                                })
-                            )
-
-                            await sock.sendMessage(
-                                from,
-                                {
-                                    text:
-`✅ Emoji Changed: ${emoji}`
-                                }
-                            )
-                        }
-
-                        return
-                    }
-                }
-
-                // PRIVATE FORWARD
-                if (
-                    targetGroupId &&
-                    from !== targetGroupId
-                ) {
-
-                    const type =
-                        Object.keys(
-                            msg.message
-                        )[0]
-
-                    // ANTI VIEWONCE
-                    if (
-                        type ===
-                            'viewOnceMessage' ||
-                        type ===
-                            'viewOnceMessageV2'
-                    ) {
-
-                        try {
-
-                            const mediaMsg =
-                                msg.message
-                                    .viewOnceMessage
-                                    ?.message ||
-                                msg.message
-                                    .viewOnceMessageV2
-                                    ?.message
-
-                            const mediaType =
-                                Object.keys(
-                                    mediaMsg
-                                )[0]
-
-                            const media =
-                                await downloadMediaMessage(
-                                    {
-                                        message:
-                                            mediaMsg
-                                    },
-                                    'buffer',
-                                    {},
-                                    {}
-                                )
-
-                            if (
-                                mediaType ===
-                                'imageMessage'
-                            ) {
-
-                                await sock.sendMessage(
-                                    targetGroupId,
-                                    {
-                                        image:
-                                            media,
-
-                                        caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                    }
-                                )
-                            }
-
-                            if (
-                                mediaType ===
-                                'videoMessage'
-                            ) {
-
-                                await sock.sendMessage(
-                                    targetGroupId,
-                                    {
-                                        video:
-                                            media,
-
-                                        caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                    }
-                                )
-                            }
-
-                        } catch (err) {
-
-                            console.log(
-                                'ViewOnce Error:',
-                                err
-                            )
-                        }
-                    }
-
-                    // ANTI DELETE
-                    if (
-                        type ===
-                        'protocolMessage'
-                    ) {
-
-                        const protocol =
-                            msg.message
-                                .protocolMessage
-
-                        if (
-                            protocol.type === 0
-                        ) {
-
-                            const deleted =
-                                MESSAGE_STORE[
-                                    protocol.key?.id
-                                ]
-
-                            const deletedText =
-                                deleted?.message
-                                    ?.conversation ||
-                                deleted?.message
-                                    ?.extendedTextMessage
-                                    ?.text ||
-                                'Media Message'
-
-                            await sock.sendMessage(
-                                targetGroupId,
-                                {
-                                    text:
-`🗑️ Message Deleted
-
-👤 ${sender.split('@')[0]}
-
-📩 ${deletedText}`
-                                }
-                            )
-                        }
-                    }
-                }
-
-            } catch (err) {
-
-                console.log(
-                    'Message Error:',
-                    err
-                )
-            }
-        }
-    )
-}
-
-startBot()
-async function startBot() {
-
-    const { state, saveCreds } =
-        await useMultiFileAuthState('./auth')
-
-    const { version } =
-        await fetchLatestBaileysVersion()
-
-    const sock = makeWASocket({
-        version,
-        auth: state,
-
-        logger: pino({
-            level: 'silent'
-        }),
-
-        browser: [
-            'Mini-MD',
-            'Chrome',
-            '1.0.0'
-        ],
-
-        printQRInTerminal: false,
-
-        markOnlineOnConnect: false,
-
-        syncFullHistory: false,
-
-        generateHighQualityLinkPreview: false,
-
-        defaultQueryTimeoutMs: 0
-    })
-
-    // PAIR CODE
-    if (!state.creds.registered) {
-
-        setTimeout(async () => {
-
-            try {
-
-                const code =
-                    await sock.requestPairingCode(
-                        OWNER_NUMBER
-                    )
-
-                console.log(`
-╔════════════════════╗
-      PAIR CODE
-       ${code}
-╚════════════════════╝
-`)
-
-            } catch (err) {
-
-                console.log(
-                    'Pair Code Error:',
-                    err
-                )
-            }
-
-        }, 3000)
-    }
-
-    sock.ev.on(
-        'creds.update',
-        saveCreds
-    )
-
-    // CONNECTION
-    sock.ev.on(
-        'connection.update',
-        async (update) => {
-
-            const {
-                connection,
-                lastDisconnect
-            } = update
-
-            if (connection === 'close') {
-
-                const shouldReconnect =
-                    lastDisconnect?.error
-                        ?.output?.statusCode !==
-                    DisconnectReason.loggedOut
-
-                console.log(
-                    '❌ Connection Closed'
-                )
-
-                if (shouldReconnect) {
-                    startBot()
-                }
-
-            } else if (
-                connection === 'open'
-            ) {
-
-                console.log(
-                    '✅ Bot Connected'
-                )
-            }
-        }
-    )
-
-    // MESSAGE HANDLER
-    sock.ev.on(
-        'messages.upsert',
-        async ({ messages }) => {
-
-            try {
-
-                const msg = messages[0]
-
-                if (!msg.message) return
-
-                const from =
-                    msg.key.remoteJid
-
-                const sender =
-                    msg.key.participant ||
-                    msg.key.remoteJid ||
-                    ''
-
-                const text =
-                    msg.message.conversation ||
-                    msg.message
-                        .extendedTextMessage
-                        ?.text ||
-                    ''
-
-                // SAVE MESSAGE
-                MESSAGE_STORE[msg.key.id] =
-                    msg
-
-                // OWNER COMMANDS
-                if (
-                    sender.includes(
-                        OWNER_NUMBER
-                    )
-                ) {
-
-                    // UPDATE TARGET
-                    if (
-                        text === '.update'
-                    ) {
-
-                        targetGroupId = from
-
-                        fs.writeFileSync(
-                            TARGET_GROUP_FILE,
-                            JSON.stringify({
-                                id: from
-                            })
-                        )
-
-                        await sock.sendMessage(
-                            from,
-                            {
-                                text:
-                                    '✅ Target Updated'
-                            }
-                        )
-
-                        return
-                    }
-
-                    // CHANGE EMOJI
-                    if (
-                        text.startsWith(
-                            '.antivv '
-                        )
-                    ) {
-
-                        const emoji =
-                            text.split(' ')[1]
-
-                        if (emoji) {
-
-                            TRIGGER_EMOJI =
-                                emoji
-
-                            fs.writeFileSync(
-                                EMOJI_FILE,
-                                JSON.stringify({
-                                    emoji
-                                })
-                            )
-
-                            await sock.sendMessage(
-                                from,
-                                {
-                                    text:
-`✅ Trigger Emoji Changed To ${emoji}`
-                                }
-                            )
-                        }
-
-                        return
-                    }
-                }
-
-                // PRIVATE FORWARD SYSTEM
-                if (
-                    targetGroupId &&
-                    from !== targetGroupId
-                ) {
-
-                    const type =
-                        Object.keys(
-                            msg.message
-                        )[0]
-
-                    // ===================
-                    // ANTI VIEWONCE
-                    // ===================
-
-                    if (
-                        type ===
-                            'viewOnceMessage' ||
-                        type ===
-                            'viewOnceMessageV2'
-                    ) {
-
-                        try {
-
-                            const mediaMsg =
-                                msg.message
-                                    .viewOnceMessage
-                                    ?.message ||
-                                msg.message
-                                    .viewOnceMessageV2
-                                    ?.message
-
-                            const mediaType =
-                                Object.keys(
-                                    mediaMsg
-                                )[0]
-
-                            const media =
-                                await downloadMediaMessage(
-                                    {
-                                        message:
-                                            mediaMsg
-                                    },
-                                    'buffer',
-                                    {},
-                                    {}
-                                )
-
-                            if (
-                                mediaType ===
-                                'imageMessage'
-                            ) {
-
-                                await sock.sendMessage(
-                                    targetGroupId,
-                                    {
-                                        image:
-                                            media,
-
-                                        caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                    }
-                                )
-                            }
-
-                            if (
-                                mediaType ===
-                                'videoMessage'
-                            ) {
-
-                                await sock.sendMessage(
-                                    targetGroupId,
-                                    {
-                                        video:
-                                            media,
-
-                                        caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                    }
-                                )
-                            }
-
-                        } catch (err) {
-
-                            console.log(
-                                'ViewOnce Error:',
-                                err
-                            )
-                        }
-                    }
-
-                    // ===================
-                    // ANTI DELETE
-                    // ===================
-
-                    if (
-                        type ===
-                        'protocolMessage'
-                    ) {
-
-                        const protocol =
-                            msg.message
-                                .protocolMessage
-
-                        if (
-                            protocol.type === 0
-                        ) {
-
-                            const deleted =
-                                MESSAGE_STORE[
-                                    protocol.key?.id
-                                ]
-
-                            const deletedText =
-                                deleted?.message
-                                    ?.conversation ||
-                                deleted?.message
-                                    ?.extendedTextMessage
-                                    ?.text ||
-                                'Media Message'
-
-                            await sock.sendMessage(
-                                targetGroupId,
-                                {
-                                    text:
-`🗑️ Message Deleted
-
-👤 ${sender.split('@')[0]}
-
-📩 ${deletedText}`
-                                }
-                            )
-                        }
-                    }
-                }
-
-            } catch (err) {
-
-                console.log(
-                    'Message Error:',
-                    err
-                )
-            }
-        }
-    )
-}
-
-startBot()
-                        TRIGGER_EMOJI =
-                            emoji
-
-                        fs.writeFileSync(
-                            EMOJI_FILE,
-                            JSON.stringify({
-                                emoji
-                            })
-                        )
-
-                        await sock.sendMessage(
-                            from,
-                            {
-                                text:
-`✅ Trigger Emoji Changed To ${emoji}`
-                            }
-                        )
-                    }
-
-                    return
-                }
-            }
-
-            if (
-                targetGroupId &&
-                from !== targetGroupId
-            ) {
-
-                const type =
-                    Object.keys(
-                        msg.message
-                    )[0]
-
-                // VIEWONCE
-                if (
-                    type ===
-                        'viewOnceMessage' ||
-                    type ===
-                        'viewOnceMessageV2'
-                ) {
-
-                    try {
-
-                        const mediaMsg =
-                            msg.message
-                                .viewOnceMessage
-                                ?.message ||
-                            msg.message
-                                .viewOnceMessageV2
-                                ?.message
-
-                        const mediaType =
-                            Object.keys(
-                                mediaMsg
-                            )[0]
-
-                        const media =
-                            await downloadMediaMessage(
-                                {
-                                    message:
-                                        mediaMsg
-                                },
-                                'buffer',
-                                {},
-                                {}
-                            )
-
-                        if (
-                            mediaType ===
-                            'imageMessage'
-                        ) {
-
-                            await sock.sendMessage(
-                                targetGroupId,
-                                {
-                                    image:
-                                        media,
-
-                                    caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                }
-                            )
-                        }
-
-                        if (
-                            mediaType ===
-                            'videoMessage'
-                        ) {
-
-                            await sock.sendMessage(
-                                targetGroupId,
-                                {
-                                    video:
-                                        media,
-
-                                    caption:
-`${TRIGGER_EMOJI} Anti ViewOnce
-
-👤 ${sender.split('@')[0]}`
-                                }
-                            )
-                        }
-
-                    } catch (err) {
-
-                        console.log(
-                            'ViewOnce Error:',
-                            err
-                        )
-                    }
-                }
-            }
-
         } catch (err) {
-
-            console.log(
-                'Message Handler Error:',
-                err
-            )
+            console.log(err);
         }
-    }
-)        syncFullHistory: false,
+    });
 
-        generateHighQualityLinkPreview: false,
-
-        defaultQueryTimeoutMs: 0
-    })
-
-    // PAIR CODE
-    if (!state.creds.registered) {
-
-        setTimeout(async () => {
-
-            try {
-
-                const code =
-                    await sock.requestPairingCode(
-                        OWNER_NUMBER
-                    )
-
-                console.log(`
-╔════════════════════╗
-      PAIR CODE
-       ${code}
-╚════════════════════╝
-`)
-
-            } catch (err) {
-
-                console.log(
-                    'Pair Code Error:',
-                    err
-                )
+    // 3. ANTI-DELETE AUR ANTI-EDIT UPDATE HANDLER
+    sock.ev.on('messages.update', async (chatUpdate) => {
+        for (const { key, update } of chatUpdate) {
+            if (update.messageStubType === 68 && config.antiDelete) { 
+                // Message Delete Hone Par Signal (StubType 68)
+                console.log("A message was deleted!");
+                // Note: Complete deletion logging ke liye database ya memory storage ki zaroorat hoti hai jahan purana message pehle se saved ho.
             }
-
-        }, 3000)
-    }
-
-    sock.ev.on(
-        'creds.update',
-        saveCreds
-    )
-
-    sock.ev.on(
-        'connection.update',
-        async (update) => {
-
-            const {
-                connection,
-                lastDisconnect
-            } = update
-
-            if (connection === 'close') {
-
-                const statusCode =
-                    lastDisconnect?.error
-                        ?.output?.statusCode
-
-                const shouldReconnect =
-                    statusCode !==
-                    DisconnectReason.loggedOut
-
-                console.log(
-                    '❌ Connection Closed'
-                )
-
-                if (shouldReconnect) {
-                    startBot()
-                }
-
-            } else if (
-                connection === 'open'
-            ) {
-
-                console.log(
-                    '✅ Bot Connected'
-                )
+            
+            if (update.editedMessage && config.antiEdit) {
+                // Message Edit hone par purana chat aur naya text detect karna
+                const from = key.remoteJid;
+                const editedText = update.editedMessage.conversation || update.editedMessage.extendedTextMessage?.text;
+                await sock.sendMessage(from, { text: `⚠️ *[ANTI-EDIT DETECTED]*\n\nUser ne message edit kiya hai.\n*Naya Text:* ${editedText}` }, { reference: key });
             }
         }
-    )
-
-    sock.ev.on(
-        'messages.upsert',
-        async ({ messages }) => {
-
-            try {
-
-                const msg = messages[0]
-
-                if (!msg.message) return
-
-                const from =
-                    msg.key.remoteJid
-
-                const sender =
-                    msg.key.participant ||
-                    msg.key.remoteJid ||
-                    ''
-
-                const text =
-                    msg.message.conversation ||
-                    msg.message
-                        .extendedTextMessage
-                        ?.text ||
-                    ''
-
-                // SAVE MESSAGE
-                MESSAGE_STORE[msg.key.id] =                    TRIGGER_EMOJI = newEmoji
-                    fs.writeFileSync(EMOJI_FILE, JSON.stringify({ emoji: newEmoji }))
-                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
-                }
-                return
-            }
-        }
-
-        // Anti-delete and Anti-viewonce
-        if (targetGroupId && from!== targetGroupId) {
-            const messageType = Object.keys(msg.message)[0]
-
-            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
-                await sock.sendMessage(targetGroupId, {
-                    text: `🗑️ *Message Deleted*\nFrom: ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
-                })
-            }
-
-            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
-                try {
-                    const mediaMsg = msg.message.viewOnceMessage?.message || msg.message.viewOnceMessageV2?.message
-                    const mediaType = Object.keys(mediaMsg)[0]
-                    const media = await downloadMediaMessage({ message: mediaMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) })
-
-                    if (mediaType === 'imageMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            image: media,
-                            caption: `${TRIGGER_EMOJI} *ViewOnce Image*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    } else if (mediaType === 'videoMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            video: media,
-                            caption: `${TRIGGER_EMOJI} *ViewOnce Video*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    }
-                } catch (e) {
-                    console.log('ViewOnce error:', e)
-                }
-            }
-        }
-    })
+    });
 }
 
-startBot()
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) startBot()
-        } else if (connection === 'open') {
-            console.log('✅ Bot Connected!')
-        }
-        if (qr) {
-            console.log('\n========== PAIRING CODE ==========')
-            console.log('WhatsApp > Linked Devices > Link with phone number')
-            console.log('==================================\n')
-        }
-    })
-
-    sock.ev.on('creds.update', saveCreds)
-
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message) return
-        const sender = msg.key.participant || msg.key.remoteJid
-        const from = msg.key.remoteJid
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
-
-        // Owner commands
-        if (sender.includes(OWNER_NUMBER)) {
-
-            // Set target group
-            if (text === '.update') {
-                targetGroupId = from
-                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
-                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
-                return
-            }
-
-            // Change trigger emoji
-            if (text.startsWith('.antivv ')) {
-                const newEmoji = text.trim().split(' ')[1]
-                if (newEmoji) {
-                    TRIGGER_EMOJI = newEmoji
-                    fs.writeFileSync(EMOJI_FILE, JSON.stringify({ emoji: newEmoji }))
-                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
-                }
-                return
-            }
-        }
-
-        // Forward deleted, edited, viewonce messages to target group
-        if (targetGroupId && from!== targetGroupId) {
-            const messageType = Object.keys(msg.message)[0]
-
-            // Anti-delete
-            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
-                await sock.sendMessage(targetGroupId, {
-                    text: `🗑️ *Message Deleted*\nFrom: ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
-                })
-            }
-
-            // Anti-viewonce
-            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
-                try {
-                    const mediaMsg = msg.message.viewOnceMessage?.message || msg.message.viewOnceMessageV2?.message
-                    const mediaType = Object.keys(mediaMsg)[0]
-                    const media = await downloadMediaMessage({ message: mediaMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) })
-
-                    if (mediaType === 'imageMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            image: media,
-                            caption: `👁️ *ViewOnce Image*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    } else if (mediaType === 'videoMessage') {
-                        await sock.sendMessage(targetGroupId, {
-                            video: media,
-                            caption: `👁️ *ViewOnce Video*\nFrom: ${sender.split('@')[0]}`
-                        })
-                    }
-                } catch (e) {
-                    console.log('ViewOnce error:', e)
-                }
-            }
-        }
-    })
-}
-
-startBot()        } else if (connection === 'open') {
-            console.log('✅ Bot Connected!')
-        }
-        if (qr) {
-            console.log('\n========== PAIRING CODE ==========')
-            console.log('WhatsApp > Linked Devices > Link with phone number')
-            console.log('Code will appear here in 10-20 sec')
-            console.log('==================================\n')
-        }
-    })
-
-    sock.ev.on('creds.update', saveCreds)
-
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message) return
-        const sender = msg.key.participant || msg.key.remoteJid
-        const from = msg.key.remoteJid
-
-        // Owner commands
-        if (sender.includes(OWNER_NUMBER)) {
-            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
-
-            if (text === '.update') {
-                targetGroupId = from
-                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
-                await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
-                return
-            }
-
-            if (text.startsWith('.antivv ')) {
-                const newEmoji = text.split(' ')[1]
-                if (newEmoji) {
-                    fs.writeFileSync('emoji.json', JSON.stringify({ emoji: newEmoji }))
-                    await sock.sendMessage(from, { text: `✅ Trigger emoji set: ${newEmoji}` })
-                }
-                return
-            }
-        }
-
-        // Forward deleted, edited, viewonce messages
-        if (targetGroupId && from!== targetGroupId) {
-            const messageType = Object.keys(msg.message)[0]
-
-            if (messageType === 'protocolMessage' && msg.message.protocolMessage.type === 0) {
-                const deletedMsg = msg.message.protocolMessage.key
-                await sock.sendMessage(targetGroupId, {
-                    text: `🗑️ Message deleted by ${sender.split('@')[0]}\nTime: ${new Date().toLocaleTimeString()}`
-                })
-            }
-
-            if (messageType === 'viewOnceMessage' || messageType === 'viewOnceMessageV2') {
-                try {
-                    const media = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) })
-                    await sock.sendMessage(targetGroupId, {
-                        image: media,
-                        caption: `👁️ ViewOnce image from ${sender.split('@')[0]}`
-                    })
-                } catch (e) {}
-            }
-        }
-    })
-}
-
-startBot()
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message || msg.key.fromMe) return
-
-        const from = msg.key.remoteJid
-        const isGroup = from.endsWith('@g.us')
-        const sender = msg.key.participant || msg.key.remoteJid
-        const ownerJid = OWNER_NUMBER + '@s.whatsapp.net'
-        const msgText = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
-
-        // 1. SET TARGET GROUP - Sirf owner kar sakta hai
-        if (isGroup && msgText.toLowerCase() === '.update' && sender === ownerJid) {
-            config.targetGroup = from
-            saveConfig()
-            await sock.sendMessage(from, { text: `✅ Target group set ho gaya\nCurrent trigger: ${config.viewOnceTrigger}` })
-            return
-        }
-
-        // 2. CHANGE TRIGGER EMOJI/TEXT
-        if (isGroup && msgText.toLowerCase().startsWith('.antivv ') && sender === ownerJid) {
-            const newTrigger = msgText.split(' ')[1]
-            if (newTrigger) {
-                config.viewOnceTrigger = newTrigger
-                saveConfig()
-                await sock.sendMessage(from, { text: `✅ ViewOnce trigger set to: ${newTrigger}` })
-            } else {
-                await sock.sendMessage(from, { text: 'Usage:.antivv 😍' })
-            }
-            return
-        }
-
-        // Agar target group set nahi hai to kuch mat karo
-        if (!config.targetGroup) return
-
-        const sendTo = config.targetGroup
-
-        // 3. Anti-Delete
-        if (msg.message.protocolMessage?.type === 0) {
-            await sock.sendMessage(sendTo, {
-                text: `🗑️ *Message Deleted*\n\n*From:* ${sender.split('@')[0]}\n*Chat:* ${from.split('@')[0]}\n*Time:* ${new Date().toLocaleString('en-IN')}`
-            })
-        }
-
-        // 4. Anti-Edit
-        if (msg.message.protocolMessage?.type === 14) {
-            await sock.sendMessage(sendTo, {
-                text: `✏️ *Message Edited*\n\n*From:* ${sender.split('@')[0]}\n*Chat:* ${from.split('@')[0]}\n*Time:* ${new Date().toLocaleString('en-IN')}`
-            })
-        }
-
-        // 5. Anti-ViewOnce
-        if (msgText.includes(config.viewOnceTrigger)) {
-            const quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage
-            if (quotedMsg) {
-                try {
-                    const msgType = Object.keys(quotedMsg)[0]
-                    const buffer = await downloadMediaMessage(
-                        { message: quotedMsg },
-                        'buffer',
-                        {},
-                        { logger: pino({ level: 'silent' }) }
-                    )
-
-                    await sock.sendMessage(sendTo, {
-                        [msgType.includes('image')? 'image' : msgType.includes('video')? 'video' : 'audio']: buffer,
-                        caption: `👁️ *View Once Saved*\n\n*From:* ${sender.split('@')[0]}\n*Chat:* ${from.split('@')[0]}\n*Trigger:* ${config.viewOnceTrigger}`
-                    })
-                } catch (e) {
-                    console.log('ViewOnce error:', e)
-                }
-            } else {
-                await sock.sendMessage(msg.key.remoteJid, { text: `View once message ko reply karke ${config.viewOnceTrigger} bhejo` })
-            }
-        }
-    })
-
-    console.log('Bot is running...')
-}
-
-startBot()
+startBot();
