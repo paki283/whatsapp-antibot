@@ -19,9 +19,10 @@ let TRIGGER_EMOJI = '😭😭'
 
 if (fs.existsSync(EMOJI_FILE)) {
     try {
-        TRIGGER_EMOJI = JSON.parse(
+        const data = JSON.parse(
             fs.readFileSync(EMOJI_FILE)
-        ).emoji
+        )
+        TRIGGER_EMOJI = data.emoji
     } catch {}
 }
 
@@ -29,12 +30,356 @@ let targetGroupId = null
 
 if (fs.existsSync(TARGET_GROUP_FILE)) {
     try {
-        targetGroupId = JSON.parse(
+        const data = JSON.parse(
             fs.readFileSync(TARGET_GROUP_FILE)
-        ).id
+        )
+        targetGroupId = data.id
     } catch {}
 }
 
+async function startBot() {
+
+    const { state, saveCreds } =
+        await useMultiFileAuthState('./auth')
+
+    const { version } =
+        await fetchLatestBaileysVersion()
+
+    const sock = makeWASocket({
+        version,
+        auth: state,
+
+        logger: pino({
+            level: 'silent'
+        }),
+
+        browser: [
+            'Mini-MD',
+            'Chrome',
+            '1.0.0'
+        ],
+
+        printQRInTerminal: false,
+
+        markOnlineOnConnect: false,
+
+        syncFullHistory: false
+    })
+
+    // PAIR CODE
+    if (!state.creds.registered) {
+
+        setTimeout(async () => {
+
+            try {
+
+                const code =
+                    await sock.requestPairingCode(
+                        OWNER_NUMBER
+                    )
+
+                console.log(`
+╔══════════════════╗
+     PAIR CODE
+      ${code}
+╚══════════════════╝
+`)
+
+            } catch (err) {
+
+                console.log(
+                    'Pair Error:',
+                    err
+                )
+            }
+
+        }, 3000)
+    }
+
+    sock.ev.on(
+        'creds.update',
+        saveCreds
+    )
+
+    // CONNECTION
+    sock.ev.on(
+        'connection.update',
+        (update) => {
+
+            const {
+                connection,
+                lastDisconnect
+            } = update
+
+            if (connection === 'close') {
+
+                const shouldReconnect =
+                    lastDisconnect?.error
+                        ?.output?.statusCode !==
+                    DisconnectReason.loggedOut
+
+                console.log(
+                    '❌ Connection Closed'
+                )
+
+                if (shouldReconnect) {
+                    startBot()
+                }
+
+            } else if (
+                connection === 'open'
+            ) {
+
+                console.log(
+                    '✅ Bot Connected'
+                )
+            }
+        }
+    )
+
+    // MESSAGE HANDLER
+    sock.ev.on(
+        'messages.upsert',
+        async ({ messages }) => {
+
+            try {
+
+                const msg = messages[0]
+
+                if (!msg.message) return
+
+                const from =
+                    msg.key.remoteJid
+
+                const sender =
+                    msg.key.participant ||
+                    msg.key.remoteJid ||
+                    ''
+
+                const text =
+                    msg.message.conversation ||
+                    msg.message
+                        .extendedTextMessage
+                        ?.text ||
+                    ''
+
+                // SAVE MESSAGE
+                MESSAGE_STORE[msg.key.id] =
+                    msg
+
+                // OWNER COMMANDS
+                if (
+                    sender.includes(
+                        OWNER_NUMBER
+                    )
+                ) {
+
+                    // UPDATE TARGET
+                    if (
+                        text === '.update'
+                    ) {
+
+                        targetGroupId = from
+
+                        fs.writeFileSync(
+                            TARGET_GROUP_FILE,
+                            JSON.stringify({
+                                id: from
+                            })
+                        )
+
+                        await sock.sendMessage(
+                            from,
+                            {
+                                text:
+                                    '✅ Target Updated'
+                            }
+                        )
+
+                        return
+                    }
+
+                    // CHANGE EMOJI
+                    if (
+                        text.startsWith(
+                            '.antivv '
+                        )
+                    ) {
+
+                        const emoji =
+                            text.split(' ')[1]
+
+                        if (emoji) {
+
+                            TRIGGER_EMOJI =
+                                emoji
+
+                            fs.writeFileSync(
+                                EMOJI_FILE,
+                                JSON.stringify({
+                                    emoji
+                                })
+                            )
+
+                            await sock.sendMessage(
+                                from,
+                                {
+                                    text:
+`✅ Emoji Changed: ${emoji}`
+                                }
+                            )
+                        }
+
+                        return
+                    }
+                }
+
+                // PRIVATE FORWARD
+                if (
+                    targetGroupId &&
+                    from !== targetGroupId
+                ) {
+
+                    const type =
+                        Object.keys(
+                            msg.message
+                        )[0]
+
+                    // ANTI VIEWONCE
+                    if (
+                        type ===
+                            'viewOnceMessage' ||
+                        type ===
+                            'viewOnceMessageV2'
+                    ) {
+
+                        try {
+
+                            const mediaMsg =
+                                msg.message
+                                    .viewOnceMessage
+                                    ?.message ||
+                                msg.message
+                                    .viewOnceMessageV2
+                                    ?.message
+
+                            const mediaType =
+                                Object.keys(
+                                    mediaMsg
+                                )[0]
+
+                            const media =
+                                await downloadMediaMessage(
+                                    {
+                                        message:
+                                            mediaMsg
+                                    },
+                                    'buffer',
+                                    {},
+                                    {}
+                                )
+
+                            if (
+                                mediaType ===
+                                'imageMessage'
+                            ) {
+
+                                await sock.sendMessage(
+                                    targetGroupId,
+                                    {
+                                        image:
+                                            media,
+
+                                        caption:
+`${TRIGGER_EMOJI} Anti ViewOnce
+
+👤 ${sender.split('@')[0]}`
+                                    }
+                                )
+                            }
+
+                            if (
+                                mediaType ===
+                                'videoMessage'
+                            ) {
+
+                                await sock.sendMessage(
+                                    targetGroupId,
+                                    {
+                                        video:
+                                            media,
+
+                                        caption:
+`${TRIGGER_EMOJI} Anti ViewOnce
+
+👤 ${sender.split('@')[0]}`
+                                    }
+                                )
+                            }
+
+                        } catch (err) {
+
+                            console.log(
+                                'ViewOnce Error:',
+                                err
+                            )
+                        }
+                    }
+
+                    // ANTI DELETE
+                    if (
+                        type ===
+                        'protocolMessage'
+                    ) {
+
+                        const protocol =
+                            msg.message
+                                .protocolMessage
+
+                        if (
+                            protocol.type === 0
+                        ) {
+
+                            const deleted =
+                                MESSAGE_STORE[
+                                    protocol.key?.id
+                                ]
+
+                            const deletedText =
+                                deleted?.message
+                                    ?.conversation ||
+                                deleted?.message
+                                    ?.extendedTextMessage
+                                    ?.text ||
+                                'Media Message'
+
+                            await sock.sendMessage(
+                                targetGroupId,
+                                {
+                                    text:
+`🗑️ Message Deleted
+
+👤 ${sender.split('@')[0]}
+
+📩 ${deletedText}`
+                                }
+                            )
+                        }
+                    }
+                }
+
+            } catch (err) {
+
+                console.log(
+                    'Message Error:',
+                    err
+                )
+            }
+        }
+    )
+}
+
+startBot()
 async function startBot() {
 
     const { state, saveCreds } =
