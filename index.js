@@ -9,18 +9,15 @@ const {
 import pino from 'pino'
 import fs from 'fs'
 
-// === SETTINGS ===
-const OWNER_NUMBER = '923001234567' // Apna WhatsApp number yahan daalo with country code, no +
+const OWNER_NUMBER = '923356331700'
 const TARGET_GROUP_FILE = 'target.json'
 const EMOJI_FILE = 'emoji.json'
 
-// Load emoji
 let TRIGGER_EMOJI = '👁️'
 if (fs.existsSync(EMOJI_FILE)) {
     TRIGGER_EMOJI = JSON.parse(fs.readFileSync(EMOJI_FILE)).emoji
 }
 
-// Load target group
 let targetGroupId = null
 if (fs.existsSync(TARGET_GROUP_FILE)) {
     targetGroupId = JSON.parse(fs.readFileSync(TARGET_GROUP_FILE)).id
@@ -29,41 +26,7 @@ if (fs.existsSync(TARGET_GROUP_FILE)) {
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth')
 
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ['Personal AntiBot', 'Chrome', '1.0.0']
-    })
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) startBot()
-        } else if (connection === 'open') {
-            console.log('✅ Bot Connected!')
-        }
-        if (qr) {
-            console.log('\n========== PAIRING CODE ==========')
-            console.log('WhatsApp > Linked Devices > Link with phone number')
-            console.log('==================================\n')
-        }
-    })
-
-    sock.ev.on('creds.update', saveCreds)
-
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message) return
-        const sender = msg.key.participant || msg.key.remoteJid
-        const from = msg.key.remoteJid
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
-
-        // Owner commands
-        if (sender.includes(OWNER_NUMBER)) {
-            if (text === '.update') {
-                targetGroupId = from
-                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
+    const sock = makeWAS                fs.writeFileSync(TARGET_GROUP_FILE, JSON.stringify({ id: from }))
                 await sock.sendMessage(from, { text: '✅ Target group set ho gaya' })
                 return
             }
