@@ -1,16 +1,6 @@
 /**
- * ╔════════════════════════════════════════════════════════════╗
- * ║         WHATSAPP BOT v2.1 - STABLE VERSION                ║
- * ║                                                            ║
- * ║  ✅ Anti Delete Messages                                   ║
- * ║  ✅ Anti Edit Messages                                     ║
- * ║  ✅ Anti View Once (Save & Resend)                         ║
- * ║  ✅ 😭 Emoji Trigger (Custom)                             ║
- * ║  ✅ All Messages to Inbox                                  ║
- * ║  ✅ Last Seen Always OFF                                   ║
- * ║  ✅ Private Bot Mode                                       ║
- * ║                                                            ║
- * ╚════════════════════════════════════════════════════════════╝
+ * WHATSAPP BOT v2.2 - FIXED CONNECTION
+ * Owner: 923356331700
  */
 
 const {
@@ -18,28 +8,15 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   downloadMediaMessage,
-  jidNormalizedUser,
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
-const fs = require("fs");
-const path = require("path");
-
-// ════════════════════════════════════════════════════════════════════════════
-// ⚙️  CONFIGURATION - RAILWAY ENVIRONMENT VARIABLES
-// ════════════════════════════════════════════════════════════════════════════
 
 const BOT_CONFIG = {
-  // 📱 Bot Owner Number (environment variable ya hardcoded)
-  OWNER_PHONE: process.env.OWNER_PHONE || "923356331700",
+  OWNER_PHONE: "923356331700",
+  INBOX_JID: "923356331700@s.whatsapp.net",
+  BOT_PASSWORD: "bot123",
 
-  // 💬 Inbox JID (environment variable ya hardcoded)
-  INBOX_JID: process.env.INBOX_JID || "923356331700@s.whatsapp.net",
-
-  // 🔐 Bot ke liye Password
-  BOT_PASSWORD: process.env.BOT_PASSWORD || "bot123",
-
-  // 📍 Features Toggle
   FEATURES: {
     ANTI_DELETE: true,
     ANTI_EDIT: true,
@@ -47,22 +24,478 @@ const BOT_CONFIG = {
     EMOJI_TRIGGERS: true,
     HIDE_LAST_SEEN: true,
     PRIVATE_MODE: true,
-    AUTO_REPLY: false,
   },
 
-  // 😭 Emoji Triggers
   EMOJI_TRIGGERS: {
-    "😭": ["rona", "sad", "ro", "udas", "pain", "hurt", "cry", "roona"],
-    "😂": ["haha", "lol", "funny", "mazak", "joke", "hasna"],
-    "❤️": ["love", "pyar", "sweet", "dhanyavaad", "shukria"],
-    "🔥": ["fire", "nice", "awesome", "cool", "great", "bahut"],
-    "👍": ["ok", "theek", "sahi", "good", "yes", "bilkul"],
+    "😭": ["rona", "sad", "ro", "udas", "pain"],
+    "😂": ["haha", "lol", "funny", "mazak"],
+    "❤️": ["love", "pyar", "sweet"],
+    "🔥": ["fire", "nice", "awesome"],
+    "👍": ["ok", "theek", "good"],
   },
 
-  // 📝 Command Prefix
   PREFIX: "/",
+  ENABLE_LOGGING: true,
+};
 
-  // 📧 Logging
+class MessageStorage {
+  constructor() {
+    this.messages = new Map();
+    this.deletedMessages = new Map();
+    this.editedMessages = new Map();
+    this.viewOnceMedia = new Map();
+  }
+
+  saveMessage(jid, msgId, messageData) {
+    if (!this.messages.has(jid)) {
+      this.messages.set(jid, new Map());
+    }
+    this.messages.get(jid).set(msgId, {
+      ...messageData,
+      timestamp: new Date(),
+    });
+  }
+
+  addDeletedMessage(jid, message) {
+    if (!this.deletedMessages.has(jid)) {
+      this.deletedMessages.set(jid, []);
+    }
+    this.deletedMessages.get(jid).push({
+      ...message,
+      deletedAt: new Date(),
+    });
+  }
+
+  addEditedMessage(jid, original, edited) {
+    if (!this.editedMessages.has(jid)) {
+      this.editedMessages.set(jid, []);
+    }
+    this.editedMessages.get(jid).push({
+      original,
+      edited,
+      editedAt: new Date(),
+    });
+  }
+}
+
+const storage = new MessageStorage();
+
+const Utils = {
+  formatPhone(jid) {
+    return jid ? jid.split("@")[0] : "Unknown";
+  },
+
+  isOwner(jid) {
+    const senderJid = jid ? jid.split("@")[0] : "";
+    return senderJid === BOT_CONFIG.OWNER_PHONE;
+  },
+
+  getTime() {
+    return new Date().toLocaleString("en-PK", {
+      timeZone: "Asia/Karachi",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  },
+
+  getMessageText(msg) {
+    const m = msg.message;
+    if (!m) return null;
+    return (
+      m.conversation ||
+      m.extendedTextMessage?.text ||
+      m.imageMessage?.caption ||
+      m.videoMessage?.caption ||
+      null
+    );
+  },
+
+  getMessageType(msg) {
+    const m = msg.message;
+    if (!m) return "unknown";
+    if (m.conversation) return "text";
+    if (m.imageMessage) return "image";
+    if (m.videoMessage) return "video";
+    if (m.audioMessage) return "audio";
+    return "unknown";
+  },
+
+  log(title, message) {
+    if (!BOT_CONFIG.ENABLE_LOGGING) return;
+    console.log(
+      `\x1b[36m[${this.getTime()}]\x1b[0m \x1b[33m${title}\x1b[0m: ${message}`
+    );
+  },
+
+  error(title, error) {
+    if (!BOT_CONFIG.ENABLE_LOGGING) return;
+    console.error(
+      `\x1b[36m[${this.getTime()}]\x1b[0m \x1b[31m[ERROR] ${title}\x1b[0m:`,
+      error.message
+    );
+  },
+};
+
+async function handleViewOnceMessage(sock, msg) {
+  if (!BOT_CONFIG.FEATURES.ANTI_VIEW_ONCE) return;
+
+  const message = msg.message;
+  if (!message) return;
+
+  const viewOnce =
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.viewOnceMessageV2Extension?.message;
+
+  if (!viewOnce) return;
+
+  const senderJid = msg.key.participant || msg.key.remoteJid;
+  const sender = Utils.formatPhone(senderJid);
+  const jid = msg.key.remoteJid;
+
+  Utils.log("ANTI-VIEW-ONCE", `From ${sender}`);
+
+  try {
+    let mediaType = null;
+
+    if (viewOnce.imageMessage) {
+      mediaType = "image";
+    } else if (viewOnce.videoMessage) {
+      mediaType = "video";
+    } else if (viewOnce.audioMessage) {
+      mediaType = "audio";
+    }
+
+    if (!mediaType) return;
+
+    const buffer = await downloadMediaMessage(
+      { ...msg, message: viewOnce },
+      "buffer",
+      {},
+      {
+        logger: pino({ level: "silent" }),
+        reuploadRequest: sock.updateMediaMessage,
+      }
+    );
+
+    const caption = `👁️ *Anti View-Once*\n📱 From: @${sender}\n🕐 ${Utils.getTime()}`;
+
+    if (mediaType === "image") {
+      await sock.sendMessage(BOT_CONFIG.INBOX_JID, {
+        image: buffer,
+        caption,
+      });
+    } else if (mediaType === "video") {
+      await sock.sendMessage(BOT_CONFIG.INBOX_JID, {
+        video: buffer,
+        caption,
+      });
+    }
+
+    Utils.log("VIEW-ONCE-SAVED", "Media saved");
+  } catch (error) {
+    Utils.error("VIEW-ONCE", error);
+  }
+}
+
+async function handleDeletedMessage(sock, deletedKey) {
+  if (!BOT_CONFIG.FEATURES.ANTI_DELETE) return;
+
+  const jid = deletedKey.remoteJid;
+  const msgId = deletedKey.id;
+
+  const originalMsg = storage.messages.get(jid)?.get(msgId);
+  if (!originalMsg) return;
+
+  const sender = Utils.formatPhone(originalMsg.senderJid);
+  const text = originalMsg.text || "[Media]";
+
+  Utils.log("ANTI-DELETE", `By ${sender}`);
+
+  try {
+    storage.addDeletedMessage(jid, { sender, text });
+
+    const message = `🗑️ *Anti-Delete*\n👤 From: @${sender}\n💬 ${text}\n🕐 ${Utils.getTime()}`;
+    await sock.sendMessage(BOT_CONFIG.INBOX_JID, { text: message });
+
+    Utils.log("ANTI-DELETE-SENT", "Alert sent");
+  } catch (error) {
+    Utils.error("ANTI-DELETE", error);
+  }
+}
+
+async function handleEditedMessage(sock, msg) {
+  if (!BOT_CONFIG.FEATURES.ANTI_EDIT) return;
+
+  const message = msg.message;
+  if (!message) return;
+
+  const editedMsg =
+    message.editedMessage ||
+    (message.protocolMessage?.type === 14 && message.protocolMessage?.editedMessage);
+
+  if (!editedMsg) return;
+
+  const senderJid = msg.key.participant || msg.key.remoteJid;
+  const sender = Utils.formatPhone(senderJid);
+
+  Utils.log("ANTI-EDIT", `By ${sender}`);
+
+  try {
+    const originalText = "[Original not cached]";
+    const newText =
+      editedMsg.conversation ||
+      editedMsg.extendedTextMessage?.text ||
+      "[Unknown]";
+
+    const message_text = `✏️ *Anti-Edit*\n👤 From: @${sender}\n📝 Original: ${originalText}\n🔄 New: ${newText}\n🕐 ${Utils.getTime()}`;
+    await sock.sendMessage(BOT_CONFIG.INBOX_JID, { text: message_text });
+
+    Utils.log("ANTI-EDIT-SENT", "Alert sent");
+  } catch (error) {
+    Utils.error("ANTI-EDIT", error);
+  }
+}
+
+async function handleEmojiTriggers(sock, msg) {
+  if (!BOT_CONFIG.FEATURES.EMOJI_TRIGGERS) return;
+
+  const text = Utils.getMessageText(msg);
+  if (!text) return;
+
+  const lowerText = text.toLowerCase();
+
+  try {
+    for (const [emoji, keywords] of Object.entries(BOT_CONFIG.EMOJI_TRIGGERS)) {
+      for (const keyword of keywords) {
+        if (lowerText.includes(keyword)) {
+          await sock.sendMessage(msg.key.remoteJid, {
+            react: {
+              text: emoji,
+              key: msg.key,
+            },
+          });
+
+          Utils.log("EMOJI-TRIGGER", `${emoji} by "${keyword}"`);
+          return;
+        }
+      }
+    }
+  } catch (error) {
+    Utils.error("EMOJI-TRIGGER", error);
+  }
+}
+
+async function handleCommands(sock, msg) {
+  const text = Utils.getMessageText(msg);
+  if (!text) return;
+  if (!text.startsWith(BOT_CONFIG.PREFIX)) return;
+
+  const senderJid = msg.key.participant || msg.key.remoteJid;
+  if (!Utils.isOwner(senderJid)) return;
+
+  const [cmd] = text.slice(BOT_CONFIG.PREFIX.length).trim().split(" ");
+  const command = cmd.toLowerCase();
+  const jid = msg.key.remoteJid;
+
+  Utils.log("COMMAND", `/${command}`);
+
+  try {
+    switch (command) {
+      case "ping":
+        await sock.sendMessage(jid, { text: "🏓 Pong! Bot alive." });
+        break;
+
+      case "status":
+        const status = `
+🤖 *Bot Status - 923356331700*
+
+✅ Anti Delete: ${BOT_CONFIG.FEATURES.ANTI_DELETE ? "ON" : "OFF"}
+✅ Anti Edit: ${BOT_CONFIG.FEATURES.ANTI_EDIT ? "ON" : "OFF"}
+✅ Anti View Once: ${BOT_CONFIG.FEATURES.ANTI_VIEW_ONCE ? "ON" : "OFF"}
+✅ Emoji Triggers: ${BOT_CONFIG.FEATURES.EMOJI_TRIGGERS ? "ON" : "OFF"}
+✅ Last Seen: OFF 🕐
+✅ Private Mode: ON 🔐
+
+🕐 Time: ${Utils.getTime()}
+`;
+        await sock.sendMessage(jid, { text: status });
+        break;
+
+      case "help":
+        const help = `
+🤖 *Bot Commands*
+
+/ping - Check status
+/status - All features
+/antidelete - Toggle
+/antiedit - Toggle
+/antiviewonce - Toggle
+/emoji - Toggle
+/help - This message
+`;
+        await sock.sendMessage(jid, { text: help });
+        break;
+
+      case "antidelete":
+        BOT_CONFIG.FEATURES.ANTI_DELETE = !BOT_CONFIG.FEATURES.ANTI_DELETE;
+        await sock.sendMessage(jid, {
+          text: `🗑️ Anti-Delete: ${BOT_CONFIG.FEATURES.ANTI_DELETE ? "ON" : "OFF"}`,
+        });
+        break;
+
+      case "antiedit":
+        BOT_CONFIG.FEATURES.ANTI_EDIT = !BOT_CONFIG.FEATURES.ANTI_EDIT;
+        await sock.sendMessage(jid, {
+          text: `✏️ Anti-Edit: ${BOT_CONFIG.FEATURES.ANTI_EDIT ? "ON" : "OFF"}`,
+        });
+        break;
+
+      case "antiviewonce":
+        BOT_CONFIG.FEATURES.ANTI_VIEW_ONCE = !BOT_CONFIG.FEATURES.ANTI_VIEW_ONCE;
+        await sock.sendMessage(jid, {
+          text: `👁️ Anti-View-Once: ${BOT_CONFIG.FEATURES.ANTI_VIEW_ONCE ? "ON" : "OFF"}`,
+        });
+        break;
+
+      case "emoji":
+        BOT_CONFIG.FEATURES.EMOJI_TRIGGERS = !BOT_CONFIG.FEATURES.EMOJI_TRIGGERS;
+        await sock.sendMessage(jid, {
+          text: `😭 Emoji Triggers: ${BOT_CONFIG.FEATURES.EMOJI_TRIGGERS ? "ON" : "OFF"}`,
+        });
+        break;
+
+      default:
+        break;
+    }
+  } catch (error) {
+    Utils.error("COMMAND", error);
+  }
+}
+
+async function startBot() {
+  console.log("\n");
+  console.log("╔════════════════════════════════════════════════════════════╗");
+  console.log("║      🤖 WHATSAPP BOT v2.2 - 923356331700 - STARTING       ║");
+  console.log("╚════════════════════════════════════════════════════════════╝\n");
+
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState("./bot_session");
+
+    const sock = makeWASocket({
+      logger: pino({ level: "silent" }),
+      printQRInTerminal: true,
+      auth: state,
+      browser: ["Ubuntu", "Chrome", "22.0.0"],
+      syncFullHistory: false,
+      markOnlineOnConnect: true,
+    });
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        console.log("\n📱 SCAN QR CODE WITH WHATSAPP:\n");
+      }
+
+      if (connection === "connecting") {
+        console.log("⏳ Connecting to WhatsApp...");
+      }
+
+      if (connection === "open") {
+        console.log("\n✅ ✅ ✅ BOT CONNECTED! ✅ ✅ ✅\n");
+        console.log(`📱 Owner: 923356331700`);
+        console.log(`🕐 Time: ${Utils.getTime()}`);
+        console.log(`🔐 Private Mode: ON`);
+        console.log(`🕐 Last Seen: OFF`);
+        console.log(`\n🟢 BOT IS LIVE AND RUNNING!\n`);
+
+        try {
+          await sock.sendPresenceUpdate("unavailable");
+        } catch (e) {
+          //
+        }
+      }
+
+      if (connection === "close") {
+        const shouldReconnect =
+          lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+
+        console.log(`⚠️ Connection closed`);
+
+        if (shouldReconnect) {
+          console.log(`🔄 Reconnecting in 15 seconds...`);
+          setTimeout(startBot, 15000);
+        } else {
+          console.log(`🔐 Logged out. Delete bot_session folder and restart.`);
+          process.exit(0);
+        }
+      }
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      for (const msg of messages) {
+        if (!msg.message) continue;
+
+        const jid = msg.key.remoteJid;
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const text = Utils.getMessageText(msg);
+
+        if (!Utils.isOwner(senderJid)) continue;
+
+        storage.saveMessage(jid, msg.key.id, {
+          senderJid,
+          text,
+          type: Utils.getMessageType(msg),
+        });
+
+        if (type === "notify") {
+          await handleViewOnceMessage(sock, msg);
+          await handleEmojiTriggers(sock, msg);
+          await handleCommands(sock, msg);
+        }
+      }
+    });
+
+    sock.ev.on("messages.delete", async (item) => {
+      if (item.keys) {
+        for (const key of item.keys) {
+          await handleDeletedMessage(sock, key);
+        }
+      }
+    });
+
+    sock.ev.on("messages.update", async (updates) => {
+      for (const update of updates) {
+        if (update.update?.message) {
+          await handleEditedMessage(sock, {
+            key: update.key,
+            message: update.update.message,
+          });
+        }
+      }
+    });
+
+    return sock;
+  } catch (error) {
+    Utils.error("BOT", error);
+    console.log("🔄 Retrying in 5 seconds...");
+    setTimeout(startBot, 5000);
+  }
+}
+
+startBot().catch(console.error);
+
+process.on("SIGINT", () => {
+  console.log("\n👋 Shutting down...");
+  process.exit(0);
+});
   ENABLE_LOGGING: true,
 };
 
