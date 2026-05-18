@@ -1,69 +1,193 @@
-import makeWASocket, {
-    DisconnectReason,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    downloadMediaMessage
-} from '@whiskeysockets/baileys'
+sock.ev.on(
+    'messages.upsert',
+    async ({ messages }) => {
 
-import pino from 'pino'
-import fs from 'fs'
+        try {
 
-const OWNER_NUMBER = '923356331700'
+            const msg = messages[0]
 
-const TARGET_GROUP_FILE = './target.json'
-const EMOJI_FILE = './emoji.json'
+            if (!msg.message) return
 
-let MESSAGE_STORE = {}
+            const from =
+                msg.key.remoteJid
 
-let TRIGGER_EMOJI = '😭😭'
+            const sender =
+                msg.key.participant ||
+                msg.key.remoteJid ||
+                ''
 
-if (fs.existsSync(EMOJI_FILE)) {
-    try {
-        TRIGGER_EMOJI =
-            JSON.parse(
-                fs.readFileSync(EMOJI_FILE)
-            ).emoji
-    } catch {}
-}
+            const text =
+                msg.message.conversation ||
+                msg.message
+                    .extendedTextMessage
+                    ?.text ||
+                ''
 
-let targetGroupId = null
+            MESSAGE_STORE[msg.key.id] = msg
 
-if (fs.existsSync(TARGET_GROUP_FILE)) {
-    try {
-        targetGroupId =
-            JSON.parse(
-                fs.readFileSync(TARGET_GROUP_FILE)
-            ).id
-    } catch {}
-}
+            if (
+                sender.includes(
+                    OWNER_NUMBER
+                )
+            ) {
 
-async function startBot() {
+                if (text === '.update') {
 
-    const { state, saveCreds } =
-        await useMultiFileAuthState('./auth')
+                    targetGroupId = from
 
-    const { version } =
-        await fetchLatestBaileysVersion()
+                    fs.writeFileSync(
+                        TARGET_GROUP_FILE,
+                        JSON.stringify({
+                            id: from
+                        })
+                    )
 
-    const sock = makeWASocket({
-        version,
-        auth: state,
+                    await sock.sendMessage(
+                        from,
+                        {
+                            text:
+                                '✅ Target Updated'
+                        }
+                    )
 
-        logger: pino({
-            level: 'silent'
-        }),
+                    return
+                }
 
-        browser: [
-            'Mini-MD',
-            'Chrome',
-            '1.0.0'
-        ],
+                if (
+                    text.startsWith(
+                        '.antivv '
+                    )
+                ) {
 
-        printQRInTerminal: false,
+                    const emoji =
+                        text.split(' ')[1]
 
-        markOnlineOnConnect: false,
+                    if (emoji) {
 
-        syncFullHistory: false,
+                        TRIGGER_EMOJI =
+                            emoji
+
+                        fs.writeFileSync(
+                            EMOJI_FILE,
+                            JSON.stringify({
+                                emoji
+                            })
+                        )
+
+                        await sock.sendMessage(
+                            from,
+                            {
+                                text:
+`✅ Trigger Emoji Changed To ${emoji}`
+                            }
+                        )
+                    }
+
+                    return
+                }
+            }
+
+            if (
+                targetGroupId &&
+                from !== targetGroupId
+            ) {
+
+                const type =
+                    Object.keys(
+                        msg.message
+                    )[0]
+
+                // VIEWONCE
+                if (
+                    type ===
+                        'viewOnceMessage' ||
+                    type ===
+                        'viewOnceMessageV2'
+                ) {
+
+                    try {
+
+                        const mediaMsg =
+                            msg.message
+                                .viewOnceMessage
+                                ?.message ||
+                            msg.message
+                                .viewOnceMessageV2
+                                ?.message
+
+                        const mediaType =
+                            Object.keys(
+                                mediaMsg
+                            )[0]
+
+                        const media =
+                            await downloadMediaMessage(
+                                {
+                                    message:
+                                        mediaMsg
+                                },
+                                'buffer',
+                                {},
+                                {}
+                            )
+
+                        if (
+                            mediaType ===
+                            'imageMessage'
+                        ) {
+
+                            await sock.sendMessage(
+                                targetGroupId,
+                                {
+                                    image:
+                                        media,
+
+                                    caption:
+`${TRIGGER_EMOJI} Anti ViewOnce
+
+👤 ${sender.split('@')[0]}`
+                                }
+                            )
+                        }
+
+                        if (
+                            mediaType ===
+                            'videoMessage'
+                        ) {
+
+                            await sock.sendMessage(
+                                targetGroupId,
+                                {
+                                    video:
+                                        media,
+
+                                    caption:
+`${TRIGGER_EMOJI} Anti ViewOnce
+
+👤 ${sender.split('@')[0]}`
+                                }
+                            )
+                        }
+
+                    } catch (err) {
+
+                        console.log(
+                            'ViewOnce Error:',
+                            err
+                        )
+                    }
+                }
+            }
+
+        } catch (err) {
+
+            console.log(
+                'Message Handler Error:',
+                err
+            )
+        }
+    }
+)        syncFullHistory: false,
 
         generateHighQualityLinkPreview: false,
 
