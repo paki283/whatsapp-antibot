@@ -14,10 +14,11 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
+const crypto = require("crypto"); // Fix for "crypto is not defined"
 
-// ════════════════════════════════════════════════════════════════════
+// ════════════
 // ⚙️ CONFIGURATION
-// ════════════════════════════════════════════
+// ════════════
 
 const BOT_CONFIG = {
   OWNER_PHONE: process.env.OWNER_PHONE || "923356331700",
@@ -62,7 +63,7 @@ class MessageStorage {
       this.messages.set(jid, new Map());
     }
     this.messages.get(jid).set(msgId, {
-     ...messageData,
+    ...messageData,
       timestamp: new Date(),
     });
   }
@@ -72,7 +73,7 @@ class MessageStorage {
       this.deletedMessages.set(jid, []);
     }
     this.deletedMessages.get(jid).push({
-     ...message,
+    ...message,
       deletedAt: new Date(),
     });
   }
@@ -90,7 +91,7 @@ class MessageStorage {
 
   saveViewOnceMedia(msgId, mediaData) {
     this.viewOnceMedia.set(msgId, {
-     ...mediaData,
+    ...mediaData,
       savedAt: new Date(),
     });
   }
@@ -289,7 +290,7 @@ async function handleEditedMessage(sock, msg) {
   }
 }
 
-// ════════════════════════════════════
+// ════════════
 // 😭 EMOJI TRIGGERS
 // ════════════
 
@@ -317,7 +318,7 @@ async function handleEmojiTriggers(sock, msg) {
 
 // ════════════
 // 💬 MESSAGE COMMANDS
-// ════════════════════════════════════
+// ════════════
 
 async function handleCommands(sock, msg) {
   const text = Utils.getMessageText(msg);
@@ -353,9 +354,9 @@ async function handleCommands(sock, msg) {
   } catch (error) {
     Utils.error("COMMAND", error);
   }
-} // <- yeh bracket extra tha tumhare code me
+}
 
-// ════════════════════
+// ════════════
 // 🔌 BOT CONNECTION - PAIRING CODE
 // ════════════
 
