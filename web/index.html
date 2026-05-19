@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WhatsApp Pair</title>
+</head>
+<body>
+
+<h2>WhatsApp Pair Code</h2>
+
+<input id="num" placeholder="923xxxxxxxxx">
+<button onclick="pair()">PAIR</button>
+
+<pre id="result"></pre>
+
+<script>
+async function pair() {
+
+  let number = document.getElementById("num").value
+
+  let req = await fetch("/pair?number=" + number)
+
+  let data = await req.json()
+
+  document.getElementById("result").innerText =
+    JSON.stringify(data, null, 2)
+}
+</script>
+
+</body>
+</html>
