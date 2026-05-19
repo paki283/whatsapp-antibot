@@ -1,0 +1,4 @@
+if command == ".antidelete on" {
+    handlers.SetFeature(groupID,
+        "antidelete", true)
+}
