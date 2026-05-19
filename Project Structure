@@ -1,0 +1,17 @@
+bot/
+├── main.go
+├── go.mod
+├── Dockerfile
+├── railway.json
+├── web/
+│   └── index.html
+├── database/
+│   └── settings.json
+├── handlers/
+│   ├── commands.go
+│   ├── antidelete.go
+│   ├── antiedit.go
+│   ├── antiviewonce.go
+│   └── groups.go
+└── utils/
+    └── store.go
